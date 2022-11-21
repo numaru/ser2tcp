@@ -12,5 +12,5 @@ publish = false
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-serialport = "4.2.0"
+tokio-serial = "5.4.4"
 clap = { version = "4.0.23", features = ["cargo"] }
