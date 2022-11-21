@@ -1,0 +1,103 @@
+name: Continuous Delivery
+
+on:
+  push:
+    tags:
+      - '[0-9]+.*'
+
+jobs:
+  ensure_cargo_fmt:
+    name: Ensure 'cargo fmt' has been run
+    runs-on: ubuntu-20.04
+    steps:
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        default: true
+        profile: minimal
+        components: rustfmt
+    - uses: actions/checkout@v3
+    - run: cargo fmt -- --check
+
+  build:
+    name: ${{ matrix.job.target }} (${{ matrix.job.os }})
+    runs-on: ${{ matrix.job.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          # - { target: aarch64-unknown-linux-gnu   , name: ser2tcp-aarch64-unknown-linux-gnu.tar.gz   , os: ubuntu-20.04, use-cross: true }
+          # - { target: arm-unknown-linux-gnueabihf , name: ser2tcp-arm-unknown-linux-gnueabihf.tar.gz , os: ubuntu-20.04, use-cross: true }
+          - { target: arm-unknown-linux-musleabihf, name: ser2tcp-arm-unknown-linux-musleabihf.tar.gz, os: ubuntu-20.04, use-cross: true }
+          - { target: i686-pc-windows-msvc        , name: ser2tcp-i686-pc-windows-msvc.zip           , os: windows-2019                  }
+          # - { target: i686-unknown-linux-gnu      , name: ser2tcp-i686-unknown-linux-gnu.tar.gz      , os: ubuntu-20.04, use-cross: true }
+          - { target: i686-unknown-linux-musl     , name: ser2tcp-i686-unknown-linux-musl.tar.gz     , os: ubuntu-20.04, use-cross: true }
+          - { target: x86_64-apple-darwin         , name: ser2tcp-x86_64-apple-darwin.tar.gz         , os: macos-10.15                   }
+          - { target: x86_64-pc-windows-gnu       , name: ser2tcp-x86_64-pc-windows-gnu.zip          , os: windows-2019                  }
+          # - { target: x86_64-pc-windows-msvc      , name: ser2tcp-x86_64-pc-windows-msvc.zip         , os: windows-2019                  }
+          # - { target: x86_64-unknown-linux-gnu    , name: ser2tcp-x86_64-unknown-linux-gnu.tar.gz    , os: ubuntu-20.04, use-cross: true }
+          - { target: x86_64-unknown-linux-musl   , name: ser2tcp-x86_64-unknown-linux-musl.tar.gz   , os: ubuntu-20.04, use-cross: true }
+    steps:
+    - name: Checkout the source code
+      uses: actions/checkout@v3
+    - name: Install prerequisites
+      shell: bash
+      run: |
+        case ${{ matrix.job.target }} in
+          arm-unknown-linux-*) sudo apt-get -y update ; sudo apt-get -y install gcc-arm-linux-gnueabihf;;
+          aarch64-unknown-linux-gnu) sudo apt-get -y update ; sudo apt-get -y install gcc-aarch64-linux-gnu;;
+        esac
+    - name: Install the Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        target: ${{ matrix.job.target }}
+        override: true
+        profile: minimal # minimal component installation (ie, no documentation)
+    - name: Show the version information
+      shell: bash
+      run: |
+        gcc --version || true
+        rustup -V
+        rustup toolchain list
+        rustup default
+        cargo -V
+        rustc -V
+    - name: Build
+      uses: actions-rs/cargo@v1
+      with:
+        use-cross: ${{ matrix.job.use-cross }}
+        command: build
+        args: --locked --release --target=${{ matrix.job.target }}
+    - name: Package [Windows]
+      if: matrix.job.os == 'windows-2019'
+      run: |
+        cd target/${{ matrix.job.target }}/release
+        7z a ../../../${{ matrix.job.name }} ser2tcp.exe
+        cd -
+    - name: Package [-nix]
+      if: matrix.job.os != 'windows-2019'
+      run: |
+        cd target/${{ matrix.job.target }}/release
+        tar czvf ../../../${{ matrix.job.name }} ser2tcp
+        cd -
+    - name: Upload the artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.job.name }}
+        path: ${{ matrix.job.name }}
+
+  release:
+    name: Create and publish the release
+    runs-on: ubuntu-20.04
+    needs: [ensure_cargo_fmt, build]
+    steps:
+    - name: Download the artifacts
+      uses: actions/download-artifact@v3
+    - name: Generate the checksums
+      run: for file in ser2tcp-*/ser2tcp-*; do openssl dgst -sha256 -r "$file" | awk '{print $1}' > "${file}.sha256"; done
+    - name: Create the release
+      uses: softprops/action-gh-release@v1
+      if: success()
+      with:
+        files: ser2tcp-*/ser2tcp-*
